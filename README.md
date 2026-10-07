@@ -1,8 +1,7 @@
-<p align="center">
-  <img src="docs/icon.png" width="128" alt="DeepClean icon">
-</p>
-
-<h1 align="center">DeepClean</h1>
+<h1 align="center">
+  <img src="docs/icon.png" width="128" alt="DeepClean icon"><br>
+  DeepClean
+</h1>
 
 <p align="center">
   <b>Blazing-fast Mac cleaner. Reclaim gigabytes in seconds.</b><br>
