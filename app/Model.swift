@@ -144,6 +144,13 @@ final class AppModel: ObservableObject {
         beginWork("Scanning for files to clean")
         Task {
             defer { self.endWork() }
+            // Screenshot/demo mode: show a saved sample scan instead of running the engine.
+            if let demo = ProcessInfo.processInfo.environment["DEEPCLEAN_DEMO_FILE"],
+               let data = FileManager.default.contents(atPath: demo),
+               case .scanResult(let r)? = Engine.decode(data) {
+                self.showResult(r)
+                return
+            }
             await Engine.run(["scan-json"]) { [weak self] ev in
                 guard let self else { return }
                 switch ev {
@@ -153,14 +160,7 @@ final class AppModel: ObservableObject {
                 case .phase(let p):
                     withAnimation(.snappy) { _ = self.phasesDone.insert(p) }
                 case .scanResult(let r):
-                    self.home = r.home
-                    self.hasFullDiskAccess = r.fda
-                    self.scanSeconds = Double(r.elapsedMs) / 1000
-                    self.items = r.items.sorted { ($0.size ?? 0) > ($1.size ?? 0) }
-                    self.selected = Set(r.items.filter(\.defaultOn).map(\.id))
-                    self.expanded = []
-                    self.disk = DiskSpace.current()
-                    withAnimation(.smooth) { self.phase = .results }
+                    self.showResult(r)
                 case .failure(let m):
                     self.errorMessage = m
                     self.phase = .home
@@ -172,6 +172,20 @@ final class AppModel: ObservableObject {
                 self.phase = .home
             }
         }
+    }
+
+    private func showResult(_ r: ScanResult) {
+        home = r.home
+        hasFullDiskAccess = r.fda
+        scanSeconds = Double(r.elapsedMs) / 1000
+        items = r.items.sorted { ($0.size ?? 0) > ($1.size ?? 0) }
+        selected = Set(r.items.filter(\.defaultOn).map(\.id))
+        expanded = []
+        disk = DiskSpace.current()
+        if let t = r.disk.total, let f = r.disk.free, ProcessInfo.processInfo.environment["DEEPCLEAN_DEMO_FILE"] != nil {
+            disk = DiskSpace(total: t, free: f)
+        }
+        withAnimation(.smooth) { phase = .results }
     }
 
     func clean() {
