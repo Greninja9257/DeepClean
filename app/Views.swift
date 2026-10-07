@@ -47,6 +47,87 @@ struct PrimaryButton: View {
     }
 }
 
+/// Secondary action: soft tinted capsule with an icon that lights up on hover.
+struct SoftButton: View {
+    let title: String
+    let symbol: String
+    var tint: Color = .blue
+    var disabled = false
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
+                Text(title).font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(hovering ? .white : tint)
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .background(Capsule().fill(hovering ? AnyShapeStyle(brandGradient) : AnyShapeStyle(tint.opacity(0.13))))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
+        .onHover { hovering = $0 && !disabled }
+        .animation(.snappy(duration: 0.15), value: hovering)
+    }
+}
+
+/// Round icon-only button (back, refresh, …).
+struct RoundIconButton: View {
+    let symbol: String
+    var disabled = false
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(hovering ? .white : .secondary)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(hovering ? AnyShapeStyle(brandGradient) : AnyShapeStyle(Color.primary.opacity(0.07))))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.35 : 1)
+        .onHover { hovering = $0 && !disabled }
+        .animation(.snappy(duration: 0.15), value: hovering)
+    }
+}
+
+/// A styled drop-down that matches SoftButton.
+struct SoftMenu<Content: View>: View {
+    let title: String
+    let symbol: String
+    @ViewBuilder let content: Content
+    @State private var hovering = false
+
+    var body: some View {
+        Menu { content } label: {
+            HStack(spacing: 6) {
+                Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
+                Text(title).font(.system(size: 12, weight: .semibold))
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+            }
+            .foregroundStyle(Color.blue)
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .background(Capsule().fill(Color.blue.opacity(hovering ? 0.22 : 0.13)))
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hovering = $0 }
+    }
+}
+
 struct DiskBar: View {
     let disk: DiskSpace
     var reclaim: UInt64 = 0
@@ -221,7 +302,7 @@ struct ResultsView: View {
         VStack(spacing: 0) {
             header
                 .padding(.horizontal, 28)
-                .padding(.top, 34)
+                .padding(.top, 22)
                 .padding(.bottom, 18)
             Divider().opacity(0.6)
             ScrollView {
@@ -251,9 +332,30 @@ struct ResultsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            DiskBar(disk: model.disk, reclaim: model.selectedBytes)
-                .frame(width: 280)
-                .padding(.bottom, 4)
+            VStack(alignment: .trailing, spacing: 12) {
+                DiskBar(disk: model.disk, reclaim: model.selectedBytes)
+                    .frame(width: 280)
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Filter", text: $model.search).textFieldStyle(.plain)
+                        if !model.search.isEmpty {
+                            Button { model.search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                                .buttonStyle(.plain).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .font(.system(size: 12))
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.05)))
+                    .frame(width: 180)
+                    SoftMenu(title: "Select", symbol: "checklist") {
+                        Button("Recommended") { model.selectRecommended() }
+                        Button("Everything") { model.selectAll() }
+                        Button("Nothing") { model.selectNone() }
+                    }
+                }
+            }
+            .padding(.bottom, 4)
         }
     }
 
@@ -493,6 +595,10 @@ struct DoneView: View {
             Text("Freed \(formatBytes(model.freed))")
                 .font(.system(size: 34, weight: .bold, design: .rounded))
                 .padding(.top, 26)
+            if model.trashed > 0 {
+                Text("and moved \(formatBytes(model.trashed)) to the Trash")
+                    .font(.system(size: 14)).foregroundStyle(.secondary).padding(.top, 2)
+            }
             HStack(spacing: 8) {
                 Text(formatBytes(model.freeBefore))
                 Image(systemName: "arrow.right").font(.system(size: 11, weight: .bold))
@@ -541,25 +647,20 @@ struct DoneView: View {
 
 // MARK: - Root
 
-struct ContentView: View {
+/// The Smart Clean flow: home → scanning → results → cleaning → done.
+struct SmartCleanView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        ZStack {
-            LinearGradient(colors: [Color.blue.opacity(0.06), Color.clear], startPoint: .top, endPoint: .center)
-                .ignoresSafeArea()
-            Group {
-                switch model.phase {
-                case .home: HomeView()
-                case .scanning: ScanningView()
-                case .results: ResultsView()
-                case .cleaning: CleaningView()
-                case .done: DoneView()
-                }
+        Group {
+            switch model.phase {
+            case .home: HomeView()
+            case .scanning: ScanningView()
+            case .results: ResultsView()
+            case .cleaning: CleaningView()
+            case .done: DoneView()
             }
-            .transition(.opacity.combined(with: .scale(scale: 0.98)))
         }
-        .frame(minWidth: 760, minHeight: 600)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .transition(.opacity.combined(with: .scale(scale: 0.98)))
     }
 }

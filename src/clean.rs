@@ -19,6 +19,8 @@ pub struct Outcome {
     pub id: String,
     pub name: String,
     pub freed: u64,
+    /// Bytes moved to the Trash (not freed until the Trash is emptied).
+    pub trashed: u64,
     pub failures: u64,
     pub error: Option<String>,
 }
@@ -28,6 +30,7 @@ pub struct Report {
     pub outcomes: Vec<Outcome>,
     pub refused: Vec<String>,
     pub freed: u64,
+    pub trashed: u64,
     pub free_before: Option<u64>,
     pub free_after: Option<u64>,
 }
@@ -60,6 +63,23 @@ pub fn run(targets: &[&Target], home: &Path, whitelist: &[PathBuf], log: &mut Op
     let mut outcomes: Vec<Outcome> = jobs
         .par_iter()
         .map(|(t, paths)| {
+            if t.trash {
+                let mut moved = 0;
+                let mut failures = 0;
+                let mut error = None;
+                for p in paths {
+                    match fsutil::move_to_trash(p, home) {
+                        Ok(()) => moved += 1,
+                        Err(e) => {
+                            failures += 1;
+                            error = Some(e.to_string());
+                        }
+                    }
+                }
+                BYTES_DONE.fetch_add(t.bytes(), Ordering::Relaxed);
+                let share = if paths.is_empty() { 0 } else { t.bytes() * moved / paths.len() as u64 };
+                return Outcome { id: t.id.clone(), name: t.name.clone(), freed: 0, trashed: share, failures, error };
+            }
             let failures: u64 = paths.iter().map(|p| fsutil::remove_tree(p)).sum();
             // Partial failure: whatever is still on disk wasn't freed.
             let left: u64 = if failures > 0 {
@@ -73,6 +93,7 @@ pub fn run(targets: &[&Target], home: &Path, whitelist: &[PathBuf], log: &mut Op
                 id: t.id.clone(),
                 name: t.name.clone(),
                 freed: t.bytes().saturating_sub(left),
+                trashed: 0,
                 failures,
                 error: None,
             }
@@ -80,9 +101,14 @@ pub fn run(targets: &[&Target], home: &Path, whitelist: &[PathBuf], log: &mut Op
         .collect();
     for ((t, paths), o) in jobs.iter().zip(&outcomes) {
         for p in paths {
-            log.record(if o.failures == 0 { "deleted" } else { "partial" }, 0, &p.display().to_string());
+            let status = match (t.trash, o.failures) {
+                (true, 0) => "trashed",
+                (false, 0) => "deleted",
+                _ => "partial",
+            };
+            log.record(status, 0, &p.display().to_string());
         }
-        log.record("target", o.freed, &t.name);
+        log.record(if t.trash { "trashed-target" } else { "target" }, o.freed + o.trashed, &t.name);
     }
 
     // Commands: sequential, measured by the change in free space.
@@ -102,9 +128,10 @@ pub fn run(targets: &[&Target], home: &Path, whitelist: &[PathBuf], log: &mut Op
         let freed = fsutil::free_space(home).unwrap_or(0).saturating_sub(before);
         BYTES_DONE.fetch_add(t.bytes(), Ordering::Relaxed);
         log.record("command", freed, command);
-        outcomes.push(Outcome { id: t.id.clone(), name: t.name.clone(), freed, failures: 0, error });
+        outcomes.push(Outcome { id: t.id.clone(), name: t.name.clone(), freed, trashed: 0, failures: 0, error });
     }
 
     let freed = outcomes.iter().map(|o| o.freed).sum();
-    Report { outcomes, refused, freed, free_before, free_after: fsutil::free_space(home) }
+    let trashed = outcomes.iter().map(|o| o.trashed).sum();
+    Report { outcomes, refused, freed, trashed, free_before, free_after: fsutil::free_space(home) }
 }

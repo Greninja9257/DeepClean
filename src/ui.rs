@@ -170,7 +170,8 @@ pub fn execute(chosen: &[&Target], home: &Path, whitelist: &[PathBuf], log: &mut
             (None, 0) => (style("✔").green(), String::new()),
             (None, n) => (style("◐").yellow(), style(format!("  ({n} items in use or permission-denied)")).dim().to_string()),
         };
-        println!("  {mark} {:>9}  {}{extra}", human(o.freed), o.name);
+        let extra = if o.trashed > 0 { format!("{extra}{}", style("  → Trash").dim()) } else { extra };
+        println!("  {mark} {:>9}  {}{extra}", human(o.freed + o.trashed), o.name);
     }
     if !report.refused.is_empty() {
         println!("\n  {} skipped by safety rules:", style(report.refused.len()).yellow());
@@ -182,6 +183,9 @@ pub fn execute(chosen: &[&Target], home: &Path, whitelist: &[PathBuf], log: &mut
         }
     }
     println!("\n  {} Freed {}", style("✨").bold(), style(human(report.freed)).green().bold());
+    if report.trashed > 0 {
+        println!("  Moved {} to the Trash", style(human(report.trashed)).bold());
+    }
     if let (Some(b), Some(a)) = (report.free_before, report.free_after) {
         println!("  Disk free: {} → {}", human(b), style(human(a)).bold());
         if a.saturating_sub(b) * 2 < report.freed {

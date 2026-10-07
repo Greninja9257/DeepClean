@@ -37,7 +37,7 @@ fn archive_stem(name: &str) -> Option<&str> {
         .map(|e| &name[..name.len() - e.len()])
 }
 
-pub fn downloads(home: &Path, include_admin: bool) -> Vec<Target> {
+pub fn downloads(home: &Path, include_admin: bool, old_days: u64) -> Vec<Target> {
     const INSTALLERS: &[&str] = &["dmg", "pkg", "mpkg", "iso", "xip"];
     let mut out = Vec::new();
     let mut claimed = HashSet::new();
@@ -72,12 +72,12 @@ pub fn downloads(home: &Path, include_admin: bool) -> Vec<Target> {
             }
         }
 
-        // Anything in Downloads idle for 90+ days — opt-in. Big ones are listed
+        // Anything in Downloads idle for `old_days`+ days — opt-in. Big ones are listed
         // individually; the long tail of small files is one item.
         if dir == "Downloads" {
             let mut small = Vec::new();
             for (path, name, md) in &entries {
-                if claimed.contains(path) || name.starts_with('.') || idle_days(md) < 90 {
+                if claimed.contains(path) || name.starts_with('.') || idle_days(md) < old_days {
                     continue;
                 }
                 let big = md.is_dir() || md.blocks() * 512 >= 10_000_000;
@@ -96,7 +96,7 @@ pub fn downloads(home: &Path, include_admin: bool) -> Vec<Target> {
                 out.push(
                     Target::new(group::DOWNLOADS, "~/Downloads · old", format!("{n} smaller old files"), Action::Delete { paths: small })
                         .on(false)
-                        .note("each under 10 MB, untouched for 90+ days"),
+                        .note(format!("each under 10 MB, untouched for {old_days}+ days")),
                 );
             }
         }

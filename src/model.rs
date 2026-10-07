@@ -14,6 +14,8 @@ pub mod group {
     pub const LARGE: &str = "large";
     pub const LEFTOVERS: &str = "leftovers";
     pub const SYSTEM: &str = "system";
+    pub const UNINSTALL: &str = "uninstall";
+    pub const OPTIMIZE: &str = "optimize";
 }
 
 #[derive(Clone, Serialize)]
@@ -39,6 +41,8 @@ pub struct Target {
     pub note: String,
     /// Needs administrator rights (system caches, snapshots, …).
     pub admin: bool,
+    /// Move to the Trash instead of deleting (the user's own files).
+    pub trash: bool,
 }
 
 impl Target {
@@ -50,7 +54,7 @@ impl Target {
             Action::Command { command } => format!("cmd:{command}"),
             _ => format!("{group}:{category}:{name}"),
         };
-        Target { id, group, category, name, action, size: None, default_on: true, note: String::new(), admin: false }
+        Target { id, group, category, name, action, size: None, default_on: true, note: String::new(), admin: false, trash: false }
     }
 
     pub fn on(mut self, on: bool) -> Self {
@@ -65,6 +69,11 @@ impl Target {
 
     pub fn admin(mut self, admin: bool) -> Self {
         self.admin = admin;
+        self
+    }
+
+    pub fn trash(mut self, trash: bool) -> Self {
+        self.trash = trash;
         self
     }
 

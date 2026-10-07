@@ -14,8 +14,46 @@ struct ScanItem: Codable, Identifiable, Hashable {
     let defaultOn: Bool
     let note: String
     let admin: Bool
+    let trash: Bool?
 
     var bytes: UInt64 { size ?? 0 }
+    var movesToTrash: Bool { trash ?? false }
+}
+
+struct AppInfo: Codable, Identifiable, Hashable {
+    let name: String
+    let path: String
+    let bundleId: String
+    let version: String
+    let size: UInt64
+    let admin: Bool
+    var id: String { path }
+}
+
+struct AnalysisEntry: Codable, Identifiable, Hashable {
+    let name: String
+    let path: String
+    let size: UInt64
+    let isDir: Bool
+    let items: UInt64
+    var id: String { path }
+}
+
+struct Analysis: Codable {
+    let path: String
+    let total: UInt64
+    let entries: [AnalysisEntry]
+}
+
+private struct AppsEnvelope: Decodable { let items: [AppInfo] }
+
+/// Combined result of a clean (regular + password-protected parts).
+struct CleanSummary {
+    var outcomes: [CleanOutcome] = []
+    var refused: [String] = []
+    var problems: [String] = []
+    var freed: UInt64 { outcomes.reduce(0) { $0 + $1.freed } }
+    var trashed: UInt64 { outcomes.reduce(0) { $0 + ($1.trashed ?? 0) } }
 }
 
 struct DiskInfo: Codable { let total: UInt64?; let free: UInt64? }
@@ -32,6 +70,7 @@ struct CleanOutcome: Codable, Hashable {
     let id: String
     let name: String
     let freed: UInt64
+    let trashed: UInt64?
     let failures: UInt64
     let error: String?
 }
@@ -56,6 +95,7 @@ private struct RequestItem: Encodable {
     let size: UInt64?
     let paths: [String]?
     let command: String?
+    let trash: Bool
 }
 
 enum EngineEvent {
@@ -64,6 +104,8 @@ enum EngineEvent {
     case scanResult(ScanResult)
     case cleanProgress(done: UInt64, total: UInt64, files: UInt64)
     case cleanDone(CleanReport)
+    case apps([AppInfo])
+    case analysis(Analysis)
     case failure(String)
 }
 
@@ -97,6 +139,10 @@ enum Engine {
         case "result":
             do { return .scanResult(try decoder.decode(ScanResult.self, from: line)) }
             catch { return .failure("Couldn't read scan results: \(error.localizedDescription)") }
+        case "apps":
+            return (try? decoder.decode(AppsEnvelope.self, from: line)).map { .apps($0.items) }
+        case "analysis":
+            return (try? decoder.decode(Analysis.self, from: line)).map { .analysis($0) }
         case "done":
             return (try? decoder.decode(CleanReport.self, from: line)).map { .cleanDone($0) }
         case "error":
@@ -109,6 +155,10 @@ enum Engine {
     /// Launch the engine and deliver each event on the main actor.
     static func run(_ args: [String], stdin: Data? = nil,
                     onEvent: @escaping @MainActor (EngineEvent) -> Void) async {
+        // Keep App Nap from throttling event delivery while the window is in
+        // the background (every tool streams engine output through here).
+        let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "DeepClean engine")
+        defer { ProcessInfo.processInfo.endActivity(activity) }
         let process = Process()
         process.executableURL = url
         process.arguments = args
@@ -137,7 +187,7 @@ enum Engine {
 
     static func request(for items: [ScanItem]) -> Data {
         let req = ["items": items.map {
-            RequestItem(id: $0.id, name: $0.name, size: $0.size, paths: $0.paths, command: $0.command)
+            RequestItem(id: $0.id, name: $0.name, size: $0.size, paths: $0.paths, command: $0.command, trash: $0.movesToTrash)
         }]
         return (try? JSONEncoder().encode(req)) ?? Data()
     }
@@ -181,6 +231,62 @@ enum Engine {
                 cont.resume(returning: .failure(cancelled ? "cancelled" : "Administrator clean failed. \(errText)"))
             }
         }
+    }
+
+    /// Clean `items`: the regular ones directly, then the password-protected
+    /// ones through a single administrator prompt.
+    @MainActor
+    static func execute(_ items: [ScanItem], home: String,
+                        onProgress: @escaping @MainActor (_ done: UInt64, _ files: UInt64) -> Void = { _, _ in },
+                        onPassword: @escaping @MainActor () -> Void = {}) async -> CleanSummary {
+        var summary = CleanSummary()
+        let regular = items.filter { !$0.admin }
+        let privileged = items.filter(\.admin)
+        if !regular.isEmpty {
+            await run(["clean-json"], stdin: request(for: regular)) { ev in
+                switch ev {
+                case .cleanProgress(let done, _, let files): onProgress(done, files)
+                case .cleanDone(let r):
+                    summary.outcomes += r.outcomes
+                    summary.refused += r.refused
+                case .failure(let m): summary.problems.append(m)
+                default: break
+                }
+            }
+        }
+        if !privileged.isEmpty {
+            onPassword()
+            switch await runPrivileged(privileged, home: home) {
+            case .cleanDone(let r):
+                summary.outcomes += r.outcomes
+                summary.refused += r.refused
+            case .failure(let m) where m == "cancelled":
+                summary.problems.append("Items needing your password were skipped because the prompt was cancelled.")
+            case .failure(let m):
+                summary.problems.append(m)
+            default: break
+            }
+        }
+        for o in summary.outcomes {
+            if let e = o.error { summary.problems.append("\(o.name): \(e)") }
+            else if o.failures > 0 { summary.problems.append("\(o.name): \(o.failures) items were in use or protected") }
+        }
+        if !summary.refused.isEmpty { summary.problems.append("\(summary.refused.count) paths were skipped by safety rules") }
+        return summary
+    }
+
+    /// Run a one-shot engine command and return its final event of interest.
+    @MainActor
+    static func fetch(_ args: [String], onProgress: @escaping @MainActor (UInt64) -> Void = { _ in }) async -> EngineEvent? {
+        var result: EngineEvent?
+        await run(args) { ev in
+            switch ev {
+            case .scanProgress(let files, _): onProgress(files)
+            case .apps, .analysis, .scanResult, .failure: result = ev
+            default: break
+            }
+        }
+        return result
     }
 
     /// Add a path to the never-clean list.

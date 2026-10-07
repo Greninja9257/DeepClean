@@ -29,7 +29,21 @@ finds all of it at once and lets you pick what goes.
 - **Deep.** Dozens of cache locations, 30+ kinds of project build folders, Downloads clutter,
   large files, byte-identical duplicates and data left behind by uninstalled apps.
 - **Careful.** Anything that can't be regenerated (your files, backups, archives) is
-  listed but never selected by default. See [Safety](#safety).
+  listed but never selected by default, and your own files go to the Trash. See [Safety](#safety).
+
+## Tools
+
+| Tool | What it does |
+| --- | --- |
+| **Smart Clean** | One scan for caches, developer junk, project builds, Downloads, large files and leftovers |
+| **Uninstaller** | Removes an app plus its support files, caches, preferences, sandboxes and launch agents |
+| **Space Lens** | Drill into any folder to see what's using space, then move items to the Trash |
+| **Optimize** | Flush DNS, reset QuickLook, rebuild Launch Services and Spotlight, free memory, verify the disk |
+| **Status** | Live CPU per core, memory and swap, disk, battery health and cycle count, busiest apps |
+| **History** | Everything DeepClean has cleaned, by day, with the all-time total |
+
+Free space also shows in the menu bar (with a **Scan Now** shortcut), and **Settings** (⌘,)
+holds scan thresholds, the Trash preference and the list of protected folders.
 
 ## What it cleans
 
@@ -70,7 +84,8 @@ Leave off `--install` to build `build/DeepClean.app` without installing it.
 2. Review the groups. Recommended items are pre-selected; click a group to see each item.
 3. Click **Clean**. System items ask for your password once.
 
-Right-click any item to **Reveal in Finder** or choose **Never Clean This**.
+Right-click any item to **Reveal in Finder** or choose **Never Clean This**. Use the filter box
+and the **Select** menu to narrow down big result lists. Switch tools with ⌘1 to ⌘6.
 
 <br clear="right">
 
@@ -86,6 +101,9 @@ deepclean clean               # caches, logs, Trash, browser and dev-tool junk
 deepclean purge [PATHS…]      # project build folders (default: your home folder)
 deepclean installers          # installers, extracted archives and old files in Downloads
 sudo deepclean clean          # also system-wide caches
+deepclean uninstall [APP]     # list apps by size, or remove one and its files (to the Trash)
+deepclean analyze [PATH]      # what's using space in a folder
+deepclean optimize            # maintenance tasks (sudo for the ones that need it)
 ```
 
 | Flag | Effect |
@@ -101,7 +119,9 @@ confirms and <kbd>esc</kbd> cancels.
 
 ## Safety
 
-DeepClean deletes permanently (nothing goes to the Trash), so it is built to be conservative:
+Caches and build folders are deleted permanently, since they rebuild themselves. Your own
+files (downloads, large files, app leftovers and uninstalled apps) go to the Trash instead,
+so you can put them back. You can change that in Settings.
 
 - **Safety gate.** Every path is checked right before deletion. It must sit inside your home
   folder or a known cache or log location, and can never be a top-level folder like `~/Documents`
@@ -113,8 +133,10 @@ DeepClean deletes permanently (nothing goes to the Trash), so it is built to be 
 - **Opt-in for anything personal.** Large files, old downloads, AI models, iOS backups, Xcode
   Archives and system items are never selected by default.
 - **Running apps are respected.** Caches for apps that are open (Chrome, Xcode…) are deselected.
+- **Uninstalls stay in bounds.** Only third-party apps can be removed (never Apple's), and
+  system-level helpers are matched by the app's bundle ID inside a short list of folders.
 - **Whitelist.** `deepclean whitelist add <path>` protects a path forever (`list` and `remove`
-  also work). In the app, use **Never Clean This**.
+  also work). In the app, use **Never Clean This** or Settings › Protected.
 - **Log.** Every operation is recorded in `~/Library/Logs/deepclean/operations.log`. View it
   with `deepclean history`.
 
@@ -127,12 +149,15 @@ DeepClean.app (SwiftUI)  ──JSON over stdout──▶  deepclean-engine (Rust
                                                  ├─ catalog   cache locations
                                                  ├─ purge     project build folders
                                                  ├─ extra     downloads, large files, leftovers
+                                                 ├─ apps      uninstaller
+                                                 ├─ analyze   Space Lens
                                                  ├─ scan      runs every scanner in parallel
-                                                 └─ clean     safety gate + parallel delete
+                                                 └─ clean     safety gate, parallel delete, Trash
 ```
 
-The app bundles the Rust binary and talks to it over line-delimited JSON (`scan-json` and
-`clean-json`). Admin-only items run through the same engine via the standard macOS password
+The app bundles the Rust binary and talks to it over line-delimited JSON (`scan-json`,
+`clean-json`, `apps-json`, `analyze-json`, …). Settings live in
+`~/.config/deepclean/settings.json` and are shared by the app and the CLI. Admin-only items run through the same engine via the standard macOS password
 prompt. External tools are only ever invoked from a fixed allowlist (`brew cleanup`,
 `xcrun simctl`, `tmutil`, …).
 

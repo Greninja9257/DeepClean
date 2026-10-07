@@ -44,7 +44,9 @@ struct DiskSpace {
 
 @MainActor
 final class AppModel: ObservableObject {
+    @Published var section: SidebarSection? = .clean
     @Published var phase: Phase = .home
+    @Published var search = ""
     @Published var disk = DiskSpace.current()
     @Published var hasFullDiskAccess = AppModel.checkFullDiskAccess()
 
@@ -68,6 +70,7 @@ final class AppModel: ObservableObject {
 
     // done
     @Published var freed: UInt64 = 0
+    @Published var trashed: UInt64 = 0
     @Published var freeBefore: UInt64 = 0
     @Published var problems: [String] = []
     @Published var errorMessage: String?
@@ -92,12 +95,21 @@ final class AppModel: ObservableObject {
 
     // MARK: derived
 
+    /// Items in a group that match the filter text.
     func items(in group: String) -> [ScanItem] {
-        items.filter { $0.group == group }
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        return items.filter {
+            $0.group == group && (q.isEmpty || $0.name.lowercased().contains(q)
+                || $0.category.lowercased().contains(q) || $0.note.lowercased().contains(q))
+        }
     }
 
+    func selectRecommended() { selected = Set(items.filter(\.defaultOn).map(\.id)) }
+    func selectAll() { selected = Set(items.map(\.id)) }
+    func selectNone() { selected = [] }
+
     var visibleGroups: [GroupInfo] {
-        groupOrder.filter { g in items.contains { $0.group == g.id } }
+        groupOrder.filter { g in !items(in: g.id).isEmpty }
     }
 
     var selectedItems: [ScanItem] { items.filter { selected.contains($0.id) } }
@@ -181,6 +193,7 @@ final class AppModel: ObservableObject {
         items = r.items.sorted { ($0.size ?? 0) > ($1.size ?? 0) }
         selected = Set(r.items.filter(\.defaultOn).map(\.id))
         expanded = []
+        search = ""
         disk = DiskSpace.current()
         if let t = r.disk.total, let f = r.disk.free, ProcessInfo.processInfo.environment["DEEPCLEAN_DEMO_FILE"] != nil {
             disk = DiskSpace(total: t, free: f)
@@ -191,8 +204,6 @@ final class AppModel: ObservableObject {
     func clean() {
         let chosen = selectedItems
         guard !chosen.isEmpty else { return }
-        let regular = chosen.filter { !$0.admin }
-        let privileged = chosen.filter(\.admin)
         freeBefore = DiskSpace.current().free
         cleanDone = 0
         cleanTotal = max(1, chosen.reduce(0) { $0 + $1.bytes })
@@ -204,45 +215,19 @@ final class AppModel: ObservableObject {
 
         Task {
             defer { self.endWork() }
-            var outcomes: [CleanOutcome] = []
-            var refused: [String] = []
-            if !regular.isEmpty {
-                await Engine.run(["clean-json"], stdin: Engine.request(for: regular)) { [weak self] ev in
-                    guard let self else { return }
-                    switch ev {
-                    case .cleanProgress(let done, _, let files):
-                        self.cleanDone = done
-                        self.filesRemoved = files
-                    case .cleanDone(let r):
-                        outcomes += r.outcomes
-                        refused += r.refused
-                    case .failure(let m):
-                        self.problems.append(m)
-                    default: break
-                    }
-                }
-            }
-            if !privileged.isEmpty {
-                cleaningLabel = "Waiting for your password…"
-                switch await Engine.runPrivileged(privileged, home: home) {
-                case .cleanDone(let r):
-                    outcomes += r.outcomes
-                    refused += r.refused
-                case .failure(let m) where m == "cancelled":
-                    problems.append("System items were skipped because the password prompt was cancelled.")
-                case .failure(let m):
-                    problems.append(m)
-                default: break
-                }
-            }
-            for o in outcomes {
-                if let e = o.error { problems.append("\(o.name): \(e)") }
-                else if o.failures > 0 { problems.append("\(o.name): \(o.failures) items were in use or protected") }
-            }
-            if !refused.isEmpty { problems.append("\(refused.count) paths were skipped by safety rules") }
-            freed = outcomes.reduce(0) { $0 + $1.freed }
+            let summary = await Engine.execute(
+                chosen, home: home,
+                onProgress: { [weak self] done, files in
+                    self?.cleanDone = done
+                    self?.filesRemoved = files
+                },
+                onPassword: { [weak self] in self?.cleaningLabel = "Waiting for your password…" })
+            problems = summary.problems
+            freed = summary.freed
+            trashed = summary.trashed
             cleanDone = cleanTotal
             disk = DiskSpace.current()
+            History.shared.reload()
             withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) { phase = .done }
         }
     }

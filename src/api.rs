@@ -48,7 +48,7 @@ pub fn scan_json(home: &Path, whitelist: &[PathBuf]) {
                    "files": FILES_SEEN.load(Ordering::Relaxed),
                    "bytes": BYTES_SEEN.load(Ordering::Relaxed)})
         },
-        || scan::full(home, whitelist, &|phase| emit(json!({"type": "phase", "name": phase}))),
+        || scan::full(home, whitelist, &crate::settings::load(home), &|phase| emit(json!({"type": "phase", "name": phase}))),
     );
     // JSON can only carry UTF-8 paths; skip the (rare) others rather than fail.
     let items: Vec<Target> = full
@@ -81,6 +81,8 @@ struct RequestItem {
     paths: Option<Vec<PathBuf>>,
     #[serde(default)]
     command: Option<String>,
+    #[serde(default)]
+    trash: bool,
 }
 
 pub fn clean_json(home: &Path, whitelist: &[PathBuf], input: Option<&Path>, log: &mut OpLog) {
@@ -108,6 +110,7 @@ pub fn clean_json(home: &Path, whitelist: &[PathBuf], input: Option<&Path>, log:
             let mut t = Target::new(group::JUNK, "", i.name, action);
             t.id = i.id;
             t.size = i.size;
+            t.trash = i.trash;
             Some(t)
         })
         .collect();
@@ -125,4 +128,52 @@ pub fn clean_json(home: &Path, whitelist: &[PathBuf], input: Option<&Path>, log:
     let mut v = serde_json::to_value(&report).unwrap_or_default();
     v["type"] = json!("done");
     emit(v);
+}
+
+fn emit_items(home: &Path, items: Vec<Target>, started: Instant) {
+    let items: Vec<Target> = items.into_iter().filter(|t| t.paths().iter().all(|p| p.to_str().is_some())).collect();
+    emit(json!({
+        "type": "result",
+        "fda": crate::extra::has_full_disk_access(),
+        "home": home,
+        "disk": {"total": fsutil::total_space(home), "free": fsutil::free_space(home)},
+        "elapsed_ms": started.elapsed().as_millis() as u64,
+        "items": items,
+    }));
+}
+
+/// Installed third-party apps with sizes.
+pub fn apps_json(home: &Path) {
+    let apps = crate::apps::list(home);
+    emit(json!({"type": "apps", "items": apps}));
+}
+
+/// An app bundle plus its related files, ready to uninstall.
+pub fn uninstall_scan_json(home: &Path, whitelist: &[PathBuf], app: &Path) {
+    let started = Instant::now();
+    let mut items = crate::apps::related(home, app);
+    items.retain(|t| !t.paths().iter().any(|p| whitelist.iter().any(|w| p.starts_with(w))));
+    emit_items(home, items, started);
+}
+
+/// Sizes of everything directly inside `dir`.
+pub fn analyze_json(dir: &Path) {
+    FILES_SEEN.store(0, Ordering::Relaxed);
+    BYTES_SEEN.store(0, Ordering::Relaxed);
+    let a = with_ticker(
+        || {
+            json!({"type": "progress",
+                   "files": FILES_SEEN.load(Ordering::Relaxed),
+                   "bytes": BYTES_SEEN.load(Ordering::Relaxed)})
+        },
+        || crate::analyze::analyze(dir),
+    );
+    let mut v = serde_json::to_value(&a).unwrap_or_default();
+    v["type"] = json!("analysis");
+    emit(v);
+}
+
+/// Maintenance tasks for the Optimize screen.
+pub fn optimize_json(home: &Path) {
+    emit_items(home, crate::commands::optimize_tasks(), Instant::now());
 }

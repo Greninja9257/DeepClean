@@ -1,4 +1,6 @@
+mod analyze;
 mod api;
+mod apps;
 mod catalog;
 mod clean;
 mod commands;
@@ -8,6 +10,7 @@ mod fsutil;
 mod model;
 mod purge;
 mod scan;
+mod settings;
 mod ui;
 
 use clap::{Parser, Subcommand};
@@ -80,9 +83,37 @@ enum Cmd {
         #[arg(short = 'n', default_value_t = 30)]
         lines: usize,
     },
+    /// Uninstall an app and everything it left behind (moves it all to the Trash)
+    Uninstall {
+        /// App name or path; omit to list installed apps by size
+        app: Option<String>,
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Show what's taking up space inside a folder
+    Analyze {
+        /// Folder to analyze (default: your home folder)
+        path: Option<PathBuf>,
+        /// How many entries to show
+        #[arg(short = 'n', long, default_value_t = 25)]
+        top: usize,
+    },
+    /// Run maintenance tasks (flush DNS, rebuild Launch Services, …)
+    Optimize {
+        #[command(flatten)]
+        common: Common,
+    },
     /// Scan everything and stream JSON (for the app)
     #[command(hide = true)]
     ScanJson,
+    #[command(hide = true)]
+    AppsJson,
+    #[command(hide = true)]
+    UninstallScanJson { app: PathBuf },
+    #[command(hide = true)]
+    AnalyzeJson { path: PathBuf },
+    #[command(hide = true)]
+    OptimizeJson,
     /// Clean the items in a JSON request (for the app)
     #[command(hide = true)]
     CleanJson {
@@ -196,6 +227,7 @@ impl App {
         let started = Instant::now();
         let roots = if paths.is_empty() { vec![self.home.clone()] } else { paths };
         let opts = purge::PurgeOptions { roots, min_age_days: days, max_depth: depth };
+
         let scan = ui::with_counter("Hunting for project artifacts…", || purge::scan(&self.home, &opts));
         let mut targets = scan.targets;
         ui::measure(&mut targets, &self.whitelist, "Measuring…");
@@ -213,9 +245,72 @@ impl App {
         self.finish(targets, Layout::Items, common, started);
     }
 
+    fn uninstall(&mut self, query: Option<String>, common: Common) {
+        let Some(q) = query else {
+            let mut apps = ui::with_counter("Measuring installed apps…", || apps::list(&self.home));
+            apps.sort_by_key(|a| std::cmp::Reverse(a.size));
+            for a in &apps {
+                let lock = if a.admin { " 🔒" } else { "" };
+                println!(
+                    "  {}  {}{}",
+                    style(format!("{:>9}", fsutil::human(a.size))).yellow().bold(),
+                    a.name,
+                    style(format!("  {}{lock}", a.version)).dim()
+                );
+            }
+            println!("\n  {}", style("Run `deepclean uninstall <name>` to remove one.").dim());
+            return;
+        };
+        let started = Instant::now();
+        let Some(found) = apps::find(&self.home, &q) else {
+            println!("  No installed app matches “{q}”.");
+            return;
+        };
+        let mut targets = apps::related(&self.home, &found.path);
+        targets.retain(|t| !t.paths().iter().any(|p| self.whitelist.iter().any(|w| p.starts_with(w))));
+        if !is_root() && targets.iter().any(|t| t.admin) {
+            println!("  {}", style("Some files need administrator rights; run with sudo to remove them too.").dim());
+            targets.retain(|t| !t.admin);
+        }
+        println!("  {} {}\n", style("Uninstalling").bold(), style(&found.name).cyan().bold());
+        self.finish(targets, Layout::Catalog, common, started);
+        println!("  {}", style("Everything was moved to the Trash. Empty it to free the space.").dim());
+    }
+
+    fn analyze(&mut self, path: Option<PathBuf>, top: usize) {
+        let dir = path.unwrap_or_else(|| self.home.clone());
+        let a = ui::with_counter("Measuring…", || analyze::analyze(&dir));
+        println!("  {}  {}\n", style(fsutil::tilde(&a.path, &self.home)).bold(), style(fsutil::human(a.total)).yellow().bold());
+        let max = a.entries.first().map(|e| e.size).unwrap_or(1).max(1);
+        for e in a.entries.iter().take(top) {
+            let bar = "█".repeat(((e.size as f64 / max as f64) * 24.0).round() as usize);
+            let name = if e.is_dir { format!("{}/", e.name) } else { e.name.clone() };
+            println!("  {:>9}  {:<24}  {}", fsutil::human(e.size), style(bar).cyan(), name);
+        }
+        if a.entries.len() > top {
+            println!("  {}", style(format!("… and {} more", a.entries.len() - top)).dim());
+        }
+    }
+
+    fn optimize(&mut self, common: Common) {
+        let started = Instant::now();
+        let mut tasks = commands::optimize_tasks();
+        if !is_root() {
+            for t in tasks.iter_mut().filter(|t| t.admin) {
+                t.default_on = false;
+                t.note = format!("{} (needs sudo)", t.note);
+            }
+        }
+        self.finish(tasks, Layout::Catalog, common, started);
+    }
+
     fn installers(&mut self, common: Common) {
         let started = Instant::now();
-        let mut targets = extra::downloads(&self.home, is_root());
+        let s = settings::load(&self.home);
+        let mut targets: Vec<Target> = extra::downloads(&self.home, is_root(), s.old_download_days)
+            .into_iter()
+            .map(|t| t.trash(s.trash_personal))
+            .collect();
         ui::measure(&mut targets, &self.whitelist, "Looking through Downloads…");
         targets.sort_by_key(|t| (!t.default_on, std::cmp::Reverse(t.bytes())));
         self.finish(targets, Layout::Items, common, started);
@@ -245,7 +340,23 @@ fn main() {
             banner();
             app.installers(common)
         }
+        Some(Cmd::Uninstall { app: name, common }) => {
+            banner();
+            app.uninstall(name, common)
+        }
+        Some(Cmd::Analyze { path, top }) => {
+            banner();
+            app.analyze(path, top)
+        }
+        Some(Cmd::Optimize { common }) => {
+            banner();
+            app.optimize(common)
+        }
         Some(Cmd::ScanJson) => api::scan_json(&app.home, &app.whitelist),
+        Some(Cmd::AppsJson) => api::apps_json(&app.home),
+        Some(Cmd::UninstallScanJson { app: path }) => api::uninstall_scan_json(&app.home, &app.whitelist, &path),
+        Some(Cmd::AnalyzeJson { path }) => api::analyze_json(&path),
+        Some(Cmd::OptimizeJson) => api::optimize_json(&app.home),
         Some(Cmd::CleanJson { input }) => api::clean_json(&app.home, &app.whitelist, input.as_deref(), &mut app.log),
         Some(Cmd::Whitelist { action }) => match action.unwrap_or(WhitelistCmd::List) {
             WhitelistCmd::List => {

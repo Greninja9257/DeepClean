@@ -2,7 +2,9 @@
 
 use crate::fsutil::{self, InodeSet};
 use crate::model::{Action, Target};
+use crate::settings::Settings;
 use crate::{catalog, commands, extra, purge};
+use crate::model::group;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -33,7 +35,7 @@ pub struct Full {
 
 /// Everything DeepClean can find, scanned concurrently. `phase_done` is
 /// called (from worker threads) as each scanner finishes.
-pub fn full(home: &Path, whitelist: &[PathBuf], phase_done: &(dyn Fn(&str) + Sync)) -> Full {
+pub fn full(home: &Path, whitelist: &[PathBuf], settings: &Settings, phase_done: &(dyn Fn(&str) + Sync)) -> Full {
     let fda = extra::has_full_disk_access();
     let measured = |mut v: Vec<Target>, phase: &str| {
         measure(&mut v, whitelist);
@@ -51,22 +53,26 @@ pub fn full(home: &Path, whitelist: &[PathBuf], phase_done: &(dyn Fn(&str) + Syn
                     measured(v, "caches")
                 },
                 || {
-                    let opts = purge::PurgeOptions { roots: vec![home.to_path_buf()], min_age_days: 7, max_depth: 12 };
+                    let opts = purge::PurgeOptions { roots: vec![home.to_path_buf()], min_age_days: settings.project_min_age_days, max_depth: 12 };
                     measured(purge::scan(home, &opts).targets, "projects")
                 },
             )
         },
         || {
             rayon::join(
-                || measured(extra::downloads(home, true), "downloads"),
+                || measured(extra::downloads(home, true, settings.old_download_days), "downloads"),
                 || {
                     rayon::join(
                         || {
-                            let v = extra::large_files(home, 200_000_000, &HashSet::new());
+                            let v = if settings.scan_large_files {
+                                extra::large_files(home, settings.large_file_mb * 1_000_000, &HashSet::new())
+                            } else {
+                                Vec::new()
+                            };
                             phase_done("large");
                             v
                         },
-                        || measured(if fda { extra::leftovers(home) } else { Vec::new() }, "leftovers"),
+                        || measured(if fda && settings.scan_leftovers { extra::leftovers(home) } else { Vec::new() }, "leftovers"),
                     )
                 },
             )
@@ -84,8 +90,13 @@ pub fn full(home: &Path, whitelist: &[PathBuf], phase_done: &(dyn Fn(&str) + Syn
         .collect();
     targets.extend(large);
     // A password prompt should be opt-in, never part of the default clean.
-    for t in targets.iter_mut().filter(|t| t.admin) {
-        t.default_on = false;
+    for t in targets.iter_mut() {
+        if t.admin {
+            t.default_on = false;
+        }
+        if matches!(t.group, group::DOWNLOADS | group::LARGE | group::LEFTOVERS) {
+            t.trash = settings.trash_personal;
+        }
     }
     Full { targets, fda }
 }
