@@ -326,7 +326,10 @@ fn git_tracked(path: &Path) -> bool {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return true;
     };
+    // fsmonitor off: with core.fsmonitor=true in the user's config, every
+    // `git ls-files` would otherwise leave a background daemon per repo.
     let child = Command::new("git")
+        .args(["-c", "core.fsmonitor=false"])
         .arg("-C")
         .arg(parent)
         .args(["ls-files", "-z", "--"])
