@@ -2,6 +2,7 @@
 # Builds build/DeepClean.app: the Rust engine + the SwiftUI front end.
 #   ./build-app.sh            build
 #   ./build-app.sh --install  build and copy to /Applications
+#   ./build-app.sh --dmg      build and package build/DeepClean-<version>.dmg
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -70,7 +71,18 @@ echo "▸ Signing (ad-hoc)…"
 codesign --force --sign - "$APP/Contents/MacOS/deepclean-engine"
 codesign --force --sign - "$APP"
 
-if [ "${1:-}" = "--install" ]; then
+if [ "${1:-}" = "--dmg" ]; then
+  echo "▸ Creating disk image…"
+  DMG="build/DeepClean-${VERSION}.dmg"
+  STAGE=build/dmg
+  rm -rf "$STAGE" "$DMG"
+  mkdir -p "$STAGE"
+  cp -R "$APP" "$STAGE/"
+  ln -s /Applications "$STAGE/Applications"
+  hdiutil create -quiet -volname "DeepClean" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG"
+  rm -rf "$STAGE"
+  echo "✔ Built $DMG"
+elif [ "${1:-}" = "--install" ]; then
   rm -rf /Applications/DeepClean.app
   cp -R "$APP" /Applications/
   echo "✔ Installed to /Applications/DeepClean.app"
