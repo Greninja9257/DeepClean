@@ -10,8 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/results.png" width="720" alt="DeepClean results screen"><br>
-  <sub>Example first scan of a developer Mac.</sub>
+  <img src="docs/results.png" width="720" alt="DeepClean results screen">
 </p>
 
 ## Why DeepClean
