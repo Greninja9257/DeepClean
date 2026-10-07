@@ -1,0 +1,8 @@
+# Editor AI rules (local only)
+.github/instructions/codacy.instructions.md
+
+# Build output
+/target
+/build
+
+.DS_Store

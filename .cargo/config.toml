@@ -1,0 +1,9 @@
+# Use the system toolchain directly (a swiftly `cc` shim on PATH can break linking).
+[target.aarch64-apple-darwin]
+linker = "/usr/bin/cc"
+
+[target.x86_64-apple-darwin]
+linker = "/usr/bin/cc"
+
+[env]
+CC = "/usr/bin/cc"
