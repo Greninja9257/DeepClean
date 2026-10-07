@@ -10,11 +10,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white" alt="macOS 14+">
-  <img src="https://img.shields.io/badge/Apple%20Silicon-native-555555?logo=apple&logoColor=white" alt="Apple Silicon">
-  <img src="https://img.shields.io/badge/Rust-engine-CE422B?logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/SwiftUI-app-F05138?logo=swift&logoColor=white" alt="SwiftUI">
-  <a href="https://github.com/Greninja9257/DeepClean/stargazers"><img src="https://img.shields.io/github/stars/Greninja9257/DeepClean?style=flat&logo=github" alt="Stars"></a>
-  <a href="https://github.com/Greninja9257/DeepClean/commits/main"><img src="https://img.shields.io/github/last-commit/Greninja9257/DeepClean?style=flat" alt="Last commit"></a>
+  <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-555555" alt="Apple Silicon">
+  <img src="https://img.shields.io/badge/Rust-1.88%2B-CE422B?logo=rust&logoColor=white" alt="Rust 1.88+">
 </p>
 
 <p align="center">
